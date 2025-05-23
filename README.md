@@ -1,4 +1,4 @@
-# 🔍 Unified Active Directory Security Audit Tool
+# 🔍 Remy-AD Unified Active Directory Security Audit Tool
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell) [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://claude.ai/chat/LICENSE) [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows) [![AD](https://img.shields.io/badge/Active%20Directory-2008%2B-orange.svg)](https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/get-started/virtual-dc/active-directory-domain-services-overview)
 
@@ -7,7 +7,7 @@ A comprehensive PowerShell-based Active Directory security assessment platform t
 ## 🌟 **Key Features**
 
 ### 🔧 **Comprehensive Assessment Modules**
-# 🔍 Unified Active Directory Security Audit Tool
+# 🔍 Remy-AD Unified Active Directory Security Audit Tool
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell) [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://claude.ai/chat/LICENSE) [![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows) [![AD](https://img.shields.io/badge/Active%20Directory-2008%2B-orange.svg)](https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/get-started/virtual-dc/active-directory-domain-services-overview)
 
