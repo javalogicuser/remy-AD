@@ -492,23 +492,42 @@ function Test-Prerequisites {
 #endregion
 
 #region LDAP Helper Functions
-function Get-LDAPConnection {
+function New-LDAPConnection {
     param(
-        [string]$Server = $Global:Config.DomainController,
-        [System.Management.Automation.PSCredential]$Credential = $Global:Config.Credential
+        [string]$Server = $Global:AuditConfig.DomainController,
+        [System.Management.Automation.PSCredential]$Credential = $Global:AuditConfig.Credential,
+        [switch]$UseSSL
     )
     
     try {
-        $directoryEntry = if ($Credential) {
-            New-Object System.DirectoryServices.DirectoryEntry("LDAP://$Server", $Credential.UserName, $Credential.GetNetworkCredential().Password)
-        } else {
-            New-Object System.DirectoryServices.DirectoryEntry("LDAP://$Server")
+        # Add debug logging
+        Write-Log "Attempting LDAP connection to: $Server" -Level Verbose
+        Write-Log "Using credentials: $(if($Credential) { $Credential.UserName } else { 'Current user context' })" -Level Verbose
+        
+        if ([string]::IsNullOrEmpty($Server)) {
+            throw "Domain Controller parameter is null or empty"
         }
         
-        $directoryEntry.RefreshCache()
+        $protocol = if ($UseSSL -and $Global:AuditConfig.LDAPSAvailable) { "LDAPS" } else { "LDAP" }
+        $connectionString = "$protocol`://$Server"
+        
+        Write-Log "Connection string: $connectionString" -Level Verbose
+        
+        $directoryEntry = if ($Credential) {
+            New-Object System.DirectoryServices.DirectoryEntry($connectionString, $Credential.UserName, $Credential.GetNetworkCredential().Password)
+        } else {
+            New-Object System.DirectoryServices.DirectoryEntry($connectionString)
+        }
+        
+        # Test connection
+        Write-Log "Testing LDAP connection..." -Level Verbose
+        $testDN = $directoryEntry.distinguishedName
+        Write-Log "Connection successful. Root DN: $testDN" -Level Verbose
+        
         return $directoryEntry
     } catch {
-        Write-Log "Failed to establish LDAP connection: $($_.Exception.Message)" -Level Error
+        Write-Log "LDAP connection failed: $($_.Exception.Message)" -Level Error
+        Write-Log "Server: '$Server', Protocol: '$protocol'" -Level Error
         throw
     }
 }
@@ -522,7 +541,8 @@ function Invoke-LDAPQuery {
     )
     
     try {
-        $directoryEntry = Get-LDAPConnection
+        # Fix: Use correct function name
+        $directoryEntry = New-LDAPConnection
         
         if (-not $SearchBase) {
             $SearchBase = $directoryEntry.distinguishedName
@@ -1983,16 +2003,17 @@ function Invoke-LDAPDomainDump {
         $ldapResults.DomainDump = @{
             DomainInfo = Get-LDAPDomainInfo
             Users = Get-LDAPUsers
-            Computers = Get-LDAPComputers
+            Computers = Get-LDAPComputers  
             Groups = Get-LDAPGroups
             Trusts = Get-LDAPTrusts
             Policy = Get-LDAPPolicy
         }
         
-        $Global:Config.Results.LDAP = $ldapResults
+        # Fix: Use correct global variable name
+        $Global:AuditConfig.Results.LDAP = $ldapResults
         
-        # Generate ldapdomaindump-style JSON
-        $ldapDumpPath = Join-Path $Global:Config.OutputPath "Reports\JSON\ldapdomaindump_style.json"
+        # Generate ldapdomaindump-style JSON  
+        $ldapDumpPath = Join-Path $Global:AuditConfig.OutputPath "Reports\JSON\ldapdomaindump_style.json"
         $ldapResults.DomainDump | ConvertTo-Json -Depth 10 | Set-Content -Path $ldapDumpPath -Encoding UTF8
         
         Write-Log "✅ LDAP domain dump completed successfully" -Level Success
@@ -2028,11 +2049,29 @@ function Get-LDAPUsers {
     [CmdletBinding()]
     param(
         [switch]$IncludeDisabled,
-        [string]$SearchBase = (Get-ADDomain).DistinguishedName,
-        [switch]$Verbose
+        [string]$SearchBase
     )
+    # Add this at the beginning of Get-LDAPUsers to debug
+    Write-Log "Domain Name: $($Global:AuditConfig.DomainName)" -Level Verbose
+    Write-Log "AD Module Available: $($Global:AuditConfig.ADModuleAvailable)" -Level Verbose
+    
 
     Write-Log "Querying LDAP for users..." -Level Verbose
+
+    # Set default SearchBase if not provided
+    if (-not $SearchBase) {
+        try {
+            if ($Global:AuditConfig.ADModuleAvailable) {
+                $SearchBase = (Get-ADDomain).DistinguishedName
+            } else {
+                $SearchBase = "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+            }
+        } catch {
+            $SearchBase = "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+        }
+    }
+
+    Write-Log "Using SearchBase: $SearchBase" -Level Verbose
 
     try {
         $baseFilter = "(objectClass=user)"
@@ -2040,18 +2079,33 @@ function Get-LDAPUsers {
             $baseFilter = "(&${baseFilter}(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
         }
 
+        Write-Log "Using LDAP filter: $baseFilter" -Level Verbose
+
         $results = Invoke-LDAPQuery -Filter $baseFilter -SearchBase $SearchBase -Properties @("sAMAccountName", "displayName", "mail", "whenCreated")
         
-        return $results | ForEach-Object {
-            [PSCustomObject]@{
-                SamAccountName = $_.sAMAccountName
-                DisplayName    = $_.displayName
-                Email          = $_.mail
-                Created        = $_.whenCreated
-            }
+        # Add null check for results
+        if (-not $results) {
+            Write-Log "No results returned from LDAP query" -Level Warning
+            return @()
         }
+
+        Write-Log "Processing $($results.Count) user results..." -Level Verbose
+        
+        return $results | ForEach-Object {
+            # Add null checks for each property
+            if ($_ -ne $null) {
+                [PSCustomObject]@{
+                    SamAccountName = if ($_.sAMAccountName) { $_.sAMAccountName } else { "Unknown" }
+                    DisplayName    = if ($_.displayName) { $_.displayName } else { "Unknown" }
+                    Email          = if ($_.mail) { $_.mail } else { "Unknown" }
+                    Created        = if ($_.whenCreated) { $_.whenCreated } else { "Unknown" }
+                }
+            }
+        } | Where-Object { $_ -ne $null }
+        
     } catch {
         Write-Log "LDAP user query failed: $($_.Exception.Message)" -Level Warning
+        Write-Log "Full error details: $($_.Exception.ToString())" -Level Verbose
         return @()
     }
 }
@@ -2061,10 +2115,19 @@ function Get-LDAPComputers {
     [CmdletBinding()]
     param(
         [switch]$IncludeDisabled,
-        [string]$SearchBase = (Get-ADDomain).DistinguishedName
+        [string]$SearchBase
     )
 
-    Write-Verbose "Querying LDAP for computers..."
+    Write-Log "Querying LDAP for computers..." -Level Verbose
+
+    # Set default SearchBase if not provided
+    if (-not $SearchBase) {
+        try {
+            $SearchBase = (Get-ADDomain).DistinguishedName
+        } catch {
+            $SearchBase = "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+        }
+    }
 
     try {
         $baseFilter = "(objectClass=computer)"
@@ -2083,19 +2146,27 @@ function Get-LDAPComputers {
             }
         }
     } catch {
-        Write-Warning "LDAP computer query failed: $($_.Exception.Message)"
+        Write-Log "LDAP computer query failed: $($_.Exception.Message)" -Level Warning
         return @()
     }
 }
 
-
 function Get-LDAPGroups {
     [CmdletBinding()]
     param(
-        [string]$SearchBase = (Get-ADDomain).DistinguishedName
+        [string]$SearchBase
     )
 
-    Write-Verbose "Querying LDAP for groups..."
+    Write-Log "Querying LDAP for groups..." -Level Verbose
+
+    # Set default SearchBase if not provided
+    if (-not $SearchBase) {
+        try {
+            $SearchBase = (Get-ADDomain).DistinguishedName
+        } catch {
+            $SearchBase = "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+        }
+    }
 
     try {
         $results = Invoke-LDAPQuery -Filter "(objectClass=group)" -SearchBase $SearchBase -Properties @("sAMAccountName", "description", "member", "whenCreated")
@@ -2104,41 +2175,49 @@ function Get-LDAPGroups {
             [PSCustomObject]@{
                 SamAccountName = $_.sAMAccountName
                 Description    = $_.description
-                MemberCount    = ($_.member).Count
+                MemberCount    = if ($_.member) { $_.member.Count } else { 0 }
                 Created        = $_.whenCreated
             }
         }
     } catch {
-        Write-Warning "LDAP group query failed: $($_.Exception.Message)"
+        Write-Log "LDAP group query failed: $($_.Exception.Message)" -Level Warning
         return @()
     }
 }
-
-
 function Get-LDAPTrusts {
     Write-Log "Enumerating LDAP trust objects..." -Level Verbose
 
     try {
-        $configNC = (Get-ADRootDSE).configurationNamingContext
-        $trusts = Get-ADObject -LDAPFilter "(objectClass=trustedDomain)" -SearchBase "CN=System,$configNC" -Properties *
-        return $trusts | ForEach-Object {
-            [PSCustomObject]@{
-                TrustPartner = $_.name
-                TrustDirection = $_.trustDirection
-                TrustType      = $_.trustType
+        if ($Global:AuditConfig.ADModuleAvailable) {
+            $configNC = (Get-ADRootDSE).configurationNamingContext
+            $trusts = Get-ADObject -LDAPFilter "(objectClass=trustedDomain)" -SearchBase "CN=System,$configNC" -Properties *
+            return $trusts | ForEach-Object {
+                [PSCustomObject]@{
+                    TrustPartner = $_.name
+                    TrustDirection = $_.trustDirection
+                    TrustType      = $_.trustType
+                }
             }
+        } else {
+            Write-Log "Trust enumeration requires AD module - skipping" -Level Warning
+            return @()
         }
     } catch {
         Write-Log "LDAP trust query failed: $($_.Exception.Message)" -Level Warning
         return @()
     }
 }
-
 function Get-LDAPPolicy {
     Write-Log "Fetching LDAP-linked domain policies..." -Level Verbose
 
     try {
-        $domainDN = (Get-ADDomain).DistinguishedName
+        # Construct domain DN manually if AD module not available
+        $domainDN = if ($Global:AuditConfig.ADModuleAvailable) {
+            (Get-ADDomain).DistinguishedName
+        } else {
+            "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+        }
+        
         $gpoContainer = [ADSI]"LDAP://CN=Policies,CN=System,$domainDN"
         $gpos = $gpoContainer.Children | ForEach-Object {
             [PSCustomObject]@{
@@ -2150,7 +2229,7 @@ function Get-LDAPPolicy {
         return $gpos
     } catch {
         Write-Log "LDAP GPO enumeration failed: $($_.Exception.Message)" -Level Warning
-        return @{}
+        return @()
     }
 }
 
@@ -2161,7 +2240,7 @@ function Generate-RemediationGuides {
     Write-Log "🛠️ Generating remediation guides..." -Level Info
     
     try {
-        $remediationPath = Join-Path $Global:Config.OutputPath "Remediation"
+        $remediationPath = Join-Path $Global:AuditConfig.OutputPath "Remediation"
         
         # Generate PowerShell remediation scripts
         Generate-PowerShellRemediationScripts $remediationPath
