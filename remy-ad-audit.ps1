@@ -1,6 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
-
+﻿
 #Requires -Version 5.1
 <#
 .SYNOPSIS
@@ -56,40 +54,47 @@ Set-StrictMode -Version Latest
     Requires: PowerShell 5.1+, Active Directory Module (optional), RSAT Tools
 #>
 
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory=$false, HelpMessage="Domain Controller FQDN or IP")]
+# Set strict mode and error behavior
+#$ErrorActionPreference = "Stop"
+#Set-StrictMode -Version Latest
+
+param (
+    [Parameter(Mandatory = $false, HelpMessage = "Domain Controller FQDN or IP address")]
     [string]$DomainController,
-    
-    [Parameter(Mandatory=$false, HelpMessage="Active Directory domain name")]
+
+    [Parameter(Mandatory = $false, HelpMessage = "Active Directory domain name")]
     [string]$DomainName,
-    
-    [Parameter(Mandatory=$false, HelpMessage="Credentials for AD authentication")]
+
+    [Parameter(Mandatory = $false, HelpMessage = "Credentials for AD authentication")]
     [System.Management.Automation.PSCredential]$Credential,
-    
-    [Parameter(Mandatory=$false, HelpMessage="Modules to execute")]
-    [ValidateSet('core','ldap','security','kerberos','certificates','trusts','delegation','compliance','all')]
-    [string[]]$Modules = @('all'),
-    
-    [Parameter(Mandatory=$false, HelpMessage="Output directory path")]
-    [string]$OutputPath,
-    
-    [Parameter(Mandatory=$false, HelpMessage="Output format selection")]
-    [ValidateSet('HTML','JSON','CSV','XML','All')]
+
+    [Parameter(Mandatory=$false)]
+    [string[]]$Modules = @("all"),
+
+    [Parameter(Mandatory = $false, HelpMessage = "Output directory path")]
+    [string]$OutputPath = "$env:TEMP\AD_Audit_Reports",
+
+    [Parameter(Mandatory = $false, HelpMessage = "Report output format")]
+    [ValidateSet('HTML', 'JSON', 'CSV', 'XML', 'All')]
     [string]$Format = 'All',
-    
-    [Parameter(Mandatory=$false, HelpMessage="Skip interactive prompts")]
+
+    [Parameter(Mandatory = $false, HelpMessage = "Path to BloodHound collector (SharpHound.exe)")]
+    [string]$BloodHoundPath,
+
+    [Parameter(Mandatory = $false, HelpMessage = "BloodHound collection methods")]
+    [string]$CollectionMethods = "Default,Container,Group,LocalAdmin,Session,Trusts",
+
+    [Parameter(Mandatory = $false, HelpMessage = "Skip interactive parameter prompts")]
     [switch]$SkipPrompts,
-    
-    [Parameter(Mandatory=$false, HelpMessage="Number of concurrent threads")]
-    [ValidateRange(1,50)]
-    [int]$Threads = 10,
-    
-    [Parameter(Mandatory=$false, HelpMessage="Generate compliance report")]
-    [switch]$ComplianceReport,
-    
-    [Parameter(Mandatory=$false, HelpMessage="Include remediation guidance")]
-    [switch]$IncludeRemediation
+
+    [Parameter(Mandatory = $false, HelpMessage = "Include remediation scripts and guides")]
+    [switch]$IncludeRemediation,
+
+    [Parameter(Mandatory = $false, HelpMessage = "Compress output to ZIP archive")]
+    [switch]$ZipOutput,
+
+    [Parameter(Mandatory = $false, HelpMessage = "Export BloodHound-style edge relationships")]
+    [switch]$ExportBloodHound
 )
 
 # Global Variables and Configuration
@@ -190,6 +195,48 @@ function Write-Log {
         Add-Content -Path $logFile -Value $logMessage
     }
 }
+#endregion
+
+#region BloodHound Edge Helpers
+
+$Global:BloodHoundEdges = @()
+
+function Add-BloodHoundEdge {
+    param (
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Target,
+        [Parameter(Mandatory = $true)][string]$Type,
+        [Parameter(Mandatory = $false)][hashtable]$Meta
+    )
+    if (-not $Meta) { $Meta = @{} }
+    $Global:BloodHoundEdges += [PSCustomObject]@{
+        Source = $Source
+        Target = $Target
+        Type   = $Type
+        Meta   = $Meta
+    }
+}
+
+function Export-BloodHoundEdges {
+    param (
+        [Parameter(Mandatory = $true)][string]$OutputPath
+    )
+
+    if (-not (Test-Path $OutputPath)) {
+        New-Item -Path $OutputPath -ItemType Directory | Out-Null
+    }
+
+    $Global:BloodHoundEdges |
+        Group-Object Type |
+        ForEach-Object {
+            $type = $_.Name.ToLower()
+            $filePath = Join-Path $OutputPath "$type`_edges.json"
+            $_.Group | ConvertTo-Json -Depth 10 | Set-Content -Path $filePath -Encoding UTF8
+        }
+
+    Write-Log "Exported BloodHound edges to $OutputPath" -Level Info
+}
+
 #endregion
 
 #region Parameter Validation and Setup
@@ -1651,6 +1698,29 @@ function Get-DomainTrusts {
     }
 }
 
+function Export-AuditReportToZip {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$SourceFolder,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationZip
+    )
+
+    if (Test-Path $DestinationZip) {
+        Remove-Item $DestinationZip -Force
+    }
+
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($SourceFolder, $DestinationZip)
+        Write-Log "Zipped audit report to $DestinationZip" -Level Info
+    }
+    catch {
+        Write-Warning "Failed to zip audit report: $_"
+    }
+}
+
 function Analyze-TrustSecurity {
     $trusts = Get-DomainTrusts
     Write-Log "Analyzing trust security posture..." -Level Verbose
@@ -2282,6 +2352,14 @@ function Start-UnifiedADAudit {
         
         # Generate comprehensive reports
         Generate-Reports
+
+        if ($ZipOutput) {
+        $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $zipPath = Join-Path -Path $OutputPath -ChildPath "AD_Audit_Report_$timestamp.zip"
+
+        Export-AuditReportToZip -SourceFolder $OutputPath -DestinationZip $zipPath
+}
+
         
         # Generate remediation guides if requested
         if ($IncludeRemediation) {
@@ -2371,3 +2449,7 @@ try {
     exit 1
 }
 #endregion
+
+if ($ExportBloodHound) {
+    Export-BloodHoundEdges -OutputPath $OutputPath
+}
