@@ -494,8 +494,8 @@ function Test-Prerequisites {
 #region LDAP Helper Functions
 function New-LDAPConnection {
     param(
-        [string]$Server = $Global:AuditConfig.DomainController,
-        [System.Management.Automation.PSCredential]$Credential = $Global:AuditConfig.Credential,
+        [string]$Server = $Global:Config.DomainController,
+        [System.Management.Automation.PSCredential]$Credential = $Global:Config.Credential,
         [switch]$UseSSL
     )
     
@@ -508,7 +508,7 @@ function New-LDAPConnection {
             throw "Domain Controller parameter is null or empty"
         }
         
-        $protocol = if ($UseSSL -and $Global:AuditConfig.LDAPSAvailable) { "LDAPS" } else { "LDAP" }
+        $protocol = if ($UseSSL -and $Global:Config.LDAPSAvailable) { "LDAPS" } else { "LDAP" }
         $connectionString = "$protocol`://$Server"
         
         Write-Log "Connection string: $connectionString" -Level Verbose
@@ -2010,10 +2010,10 @@ function Invoke-LDAPDomainDump {
         }
         
         # Fix: Use correct global variable name
-        $Global:AuditConfig.Results.LDAP = $ldapResults
+        $Global:Config.Results.LDAP = $ldapResults
         
         # Generate ldapdomaindump-style JSON  
-        $ldapDumpPath = Join-Path $Global:AuditConfig.OutputPath "Reports\JSON\ldapdomaindump_style.json"
+        $ldapDumpPath = Join-Path $Global:Config.OutputPath "Reports\JSON\ldapdomaindump_style.json"
         $ldapResults.DomainDump | ConvertTo-Json -Depth 10 | Set-Content -Path $ldapDumpPath -Encoding UTF8
         
         Write-Log "✅ LDAP domain dump completed successfully" -Level Success
@@ -2052,8 +2052,8 @@ function Get-LDAPUsers {
         [string]$SearchBase
     )
     # Add this at the beginning of Get-LDAPUsers to debug
-    Write-Log "Domain Name: $($Global:AuditConfig.DomainName)" -Level Verbose
-    Write-Log "AD Module Available: $($Global:AuditConfig.ADModuleAvailable)" -Level Verbose
+    Write-Log "Domain Name: $($Global:Config.DomainName)" -Level Verbose
+    Write-Log "AD Module Available: $($Global:Config.ADModuleAvailable)" -Level Verbose
     
 
     Write-Log "Querying LDAP for users..." -Level Verbose
@@ -2061,13 +2061,13 @@ function Get-LDAPUsers {
     # Set default SearchBase if not provided
     if (-not $SearchBase) {
         try {
-            if ($Global:AuditConfig.ADModuleAvailable) {
+            if ($Global:Config.ADModuleAvailable) {
                 $SearchBase = (Get-ADDomain).DistinguishedName
             } else {
-                $SearchBase = "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+                $SearchBase = "DC=$($Global:Config.DomainName.Replace('.', ',DC='))"
             }
         } catch {
-            $SearchBase = "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+            $SearchBase = "DC=$($Global:Config.DomainName.Replace('.', ',DC='))"
         }
     }
 
@@ -2125,7 +2125,7 @@ function Get-LDAPComputers {
         try {
             $SearchBase = (Get-ADDomain).DistinguishedName
         } catch {
-            $SearchBase = "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+            $SearchBase = "DC=$($Global:Config.DomainName.Replace('.', ',DC='))"
         }
     }
 
@@ -2164,7 +2164,7 @@ function Get-LDAPGroups {
         try {
             $SearchBase = (Get-ADDomain).DistinguishedName
         } catch {
-            $SearchBase = "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+            $SearchBase = "DC=$($Global:Config.DomainName.Replace('.', ',DC='))"
         }
     }
 
@@ -2188,7 +2188,7 @@ function Get-LDAPTrusts {
     Write-Log "Enumerating LDAP trust objects..." -Level Verbose
 
     try {
-        if ($Global:AuditConfig.ADModuleAvailable) {
+        if ($Global:Config.ADModuleAvailable) {
             $configNC = (Get-ADRootDSE).configurationNamingContext
             $trusts = Get-ADObject -LDAPFilter "(objectClass=trustedDomain)" -SearchBase "CN=System,$configNC" -Properties *
             return $trusts | ForEach-Object {
@@ -2212,10 +2212,10 @@ function Get-LDAPPolicy {
 
     try {
         # Construct domain DN manually if AD module not available
-        $domainDN = if ($Global:AuditConfig.ADModuleAvailable) {
+        $domainDN = if ($Global:Config.ADModuleAvailable) {
             (Get-ADDomain).DistinguishedName
         } else {
-            "DC=$($Global:AuditConfig.DomainName.Replace('.', ',DC='))"
+            "DC=$($Global:Config.DomainName.Replace('.', ',DC='))"
         }
         
         $gpoContainer = [ADSI]"LDAP://CN=Policies,CN=System,$domainDN"
@@ -2240,7 +2240,7 @@ function Generate-RemediationGuides {
     Write-Log "🛠️ Generating remediation guides..." -Level Info
     
     try {
-        $remediationPath = Join-Path $Global:AuditConfig.OutputPath "Remediation"
+        $remediationPath = Join-Path $Global:Config.OutputPath "Remediation"
         
         # Generate PowerShell remediation scripts
         Generate-PowerShellRemediationScripts $remediationPath
